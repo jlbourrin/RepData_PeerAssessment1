@@ -1,0 +1,181 @@
+---
+title: "Reproducible Research: Peer Assessment 1  Analysis of daily personal activity"
+output: 
+  html_document:
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r libraries}
+library(dplyr)
+library(ggplot2)
+```
+
+This assignment makes use of data from a personal activity monitoring device. This device collects data at 5 minute intervals through out the day. The data consists of two months of data from an anonymous individual collected during the months of October and November, 2012 and include the number of steps taken in 5 minute intervals each day.  
+
+
+### 1 - Loading and processing the data
+
+
+Raw data are imported from the following website: <https://d396qusza40orc.cloudfront.net>, in a zip file rawdata.zip, saved in a dedicated folder "Data" in the working directory.  
+After unzipping the original file, the resulting activity.csv file is uploaded in a dataset "activity". 
+
+```{r upload_data}
+
+# Upload data from the internet, save it in dedicated folder "Data", and unzip it
+if (!file.exists("Data")){
+      dir.create("Data")}
+download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip",
+              destfile = "data/rawdata.zip", method = "curl")
+unzip("data/rawdata.zip", exdir = "Data")
+activity <- read.csv("data/activity.csv", header = TRUE, na.strings = "NA")
+
+```
+
+The structure of the dataset "activity" is summarized below:
+
+``` {r activity_head}
+
+str(activity)
+
+```
+  
+### 2 - Total number of steps taken per day
+
+Let's first look at the total number of steps taken per day, and build an histogram to illustrate it.  
+NB: Considering that some interval/date have missing information on nb of steps, we will just ignore such records at this stage, and create a new dataset activity_clean for this purpose.
+
+``` {r hist}
+
+clean_activity <- activity[!is.na(activity$steps),]
+per_day <- clean_activity %>% group_by(date) %>% summarize(steps = sum(steps))
+hist(per_day$steps, col = "blue")
+
+```
+
+In this *clean* dataset, the **mean** of the total number of steps taken per day is **`r format(mean(per_day$steps), nsmall=1, big.mark=",")`** and the **median `r format(median(per_day$steps), nsmall=1, big.mark=",")`**.
+
+``` {r mean_median}
+format(mean(per_day$steps), nsmall=1, big.mark=",")
+format(median(per_day$steps), nsmall=1, big.mark=",")
+```
+
+## 3 - Average daily activity pattern
+
+Let's now look at the average daily activity pattern.  
+For this purpose, we will first compute the mean nb of steps per 5-minute interval across the 2-month daily observations. We will then build a time series plot to illustrate the daily activity pattern.
+
+``` {r daily_pattern}
+
+per_interval <- clean_activity %>% group_by(interval) %>% summarize(avg_steps = mean(steps))
+plot(per_interval, type ="l", col = "darkred", lwd = 2,
+     main = "Average daily activity pattern",
+     sub = "Daily observations from 10/01/2012 to 11/30/2012", 
+     xlab = "5-minute intervals",
+     ylab ="Average nb of steps")
+
+```
+
+Looking at the pattern, **the 5-minute interval containing the maximum number of steps** (on average across all the days in the dataset) would then be: **`r per_interval$interval[which(per_interval$avg_steps == max(per_interval$avg_steps))]`**.
+
+``` {r interval_maxsteps}
+per_interval$interval[which(per_interval$avg_steps == max(per_interval$avg_steps))]
+```
+
+  
+  
+## 4 - Dealing with missing data
+
+Now, let's reconsider the original dataset and look at the impact of missing nb of steps (which we have so far ignored).  
+There are **`r sum(is.na(activity$steps))` missing records**, out of the 17,568 observations.
+
+``` {r nb_NA}
+sum(is.na(activity$steps))
+```
+
+To fill in the gaps, let's assume that the missing nb of steps for a given day and interval is the average nb of steps for that same interval across all days where data are available.  
+It tuns out we already have build a dataframe containing the mean of nb of steps per interval, when we looked at daily activity pattern (dataframe *per_interval*). Here are the first rows:
+
+``` {r}
+head(per_interval)
+```
+
+We now just have to replace missing data using this *per_interval* dataframe:
+
+``` {r fill_gaps}
+activity_new <- activity
+activity_new$steps[is.na(activity_new$steps)] <- per_interval$avg_steps[match(activity_new$interval,per_interval$interval)]
+```
+
+And looking at the first row of the *new clean dataframe* **"activity_new"**, we can see that missing data are now filled with daily averages:
+
+``` {r}
+head(activity_new)
+```
+
+Considering this new dataframe, let's now rebuild an histogram of the total number of steps taken each day, and compare it with the histogram we built omitting missing data:
+
+``` {r hist2}
+per_day2 <- activity_new %>% group_by(date) %>% summarize(steps = sum(steps))
+par(mfcol = c(1,2))
+hist(per_day$steps, col = "blue", main = "Histogram ignoring missing data")
+hist(per_day2$steps, col = "green", main = "Histogram with filled-in data")
+```
+
+The **mean** of the total number of steps taken per day is now **`r format(mean(per_day2$steps), nsmall=1, big.mark=",")`** and the **median `r format(median(per_day2$steps), nsmall=1, big.mark=",")`**.
+
+``` {r mean_median2}
+format(mean(per_day2$steps), nsmall=1, big.mark=",")
+format(median(per_day2$steps), nsmall=1, big.mark=",")
+```
+
+Filling in missing data using the average nb of steps reported per 5-minutes interval between 10/01/2012 and 11/30/2012 has therefore the following **impact on:**  
+**- mean: `r mean(per_day2$steps) - mean(per_day$steps)`** (which is not surprising, considering we replaced missing value by the mean)  
+**- median: `r median(per_day2$steps) - median(per_day$steps)`**  
+
+``` {r}
+mean(per_day2$steps) - mean(per_day$steps)
+median(per_day2$steps) - median(per_day$steps)
+```
+
+  
+## 5 - Weekdays and weekends activity patterns
+
+Using the new dataset with filled-in data, let's now see whether of not activity patterns vary between weekdays and weekends.
+
+Let's start by creating a new factor "day_type":
+
+``` {r new_factor}
+
+weekend <- c("Saturday", "Sunday")
+
+convert_date <- function(x) {
+      x <- weekdays(as.Date(x))
+      if(x %in% weekend) {
+            day <- "weekend"
+      } else {
+            day <- "weekday"
+      }
+}
+
+day_type <- matrix(unlist(lapply(activity_new$date, convert_date)))
+activity_new <- cbind(activity_new,day_type)
+activity_new$day_type <- factor(activity_new$day_type)
+
+```
+
+We can now compare time series plot of the 5-minute interval and the average number of steps taken, averaged across all weekday days or weekend days:
+
+
+``` {r}
+per_interval2 <- activity_new %>% group_by(interval, day_type) %>% summarize(avg_steps = mean(steps))
+p <- ggplot(per_interval2, aes(x=interval,y=avg_steps)) + geom_line() + facet_grid(.~day_type)
+print(p)
+```
+
+
+As the plots illustrate, activity in weekends is more constant within the day, and does not present a large peak around interval 835.
